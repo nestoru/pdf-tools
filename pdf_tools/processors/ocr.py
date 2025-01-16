@@ -116,7 +116,7 @@ class PDFOCRProcessor:
             if result == 0:  # Success
                 # Get page count from output PDF
                 with open(output_path, 'rb') as f:
-                    from PyPDF2 import PdfReader
+                    from pypdf import PdfReader
                     pdf = PdfReader(f)
                     num_pages = len(pdf.pages)
                 

@@ -18,32 +18,24 @@ Before installing the package, ensure you have the following system dependencies
 
 - Python 3.11 or higher
 - Tesseract OCR:
-  - Ubuntu/Debian: `sudo apt-get install tesseract-ocr tesseract-lang`
-  - macOS: `brew install tesseract tesseract-lang`
-  - Windows: Download installer from https://github.com/UB-Mannheim/tesseract/wiki
+  - Ubuntu/Debian: `sudo apt-get install tesseract-ocr tesseract-ocr-eng poppler-utils unpaper ghostscript`
+  - macOS: `brew install tesseract tesseract-lang poppler unpaper ghostscript`
 
 For additional languages, install the corresponding Tesseract language packs:
 - Ubuntu/Debian: `sudo apt-get install tesseract-ocr-[lang]` (e.g., `tesseract-ocr-fra` for French)
 - macOS: Language packs are included with Tesseract
-- Windows: Select additional languages during installation
 
 Poppler is also required for PDF processing:
 - Ubuntu/Debian: `sudo apt-get install poppler-utils`
 - macOS: `brew install poppler`
-- Windows: Download from poppler releases
 
 ### Installing Poetry
 
 This project uses Poetry for dependency management. If you don't have Poetry installed, you can install it using one of these methods:
 
-**Linux, macOS, Windows (WSL):**
+**Linux, macOS:**
 ```bash
 curl -sSL https://install.python-poetry.org | python3 -
-```
-
-**Windows (PowerShell):**
-```powershell
-(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
 ```
 
 Verify the installation:
@@ -162,6 +154,12 @@ poetry build
 
 # Publish to PyPI (when ready)
 poetry publish
+```
+
+### Scheduling
+Use just cron as follows:
+```
+* * * * * ( flock -n 10 || exit 0; source ~/.profile && cd ~/workspace/pdf-tools && poetry run pdf-tools ocr /mnt/mydrive/pdf-ocr/pdf-ocr-input /mnt/mydrive/pdf-ocr/pdf-ocr-output > /tmp/pdf-ocr.log ) 10>~/pdf-ocr.lock
 ```
 
 ### Running Tests
