@@ -147,20 +147,26 @@ class PDFOCRProcessor:
             )
 
     def process_directory(self, input_dir: Path, output_dir: Path) -> DirectoryProcessResult:
-        """Process all PDF files in a directory."""
+        """Process all PDF files in a directory, including subdirectories."""
         if not input_dir.is_dir():
             raise ValueError(f"Input directory does not exist: {input_dir}")
-            
+
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         start_time = datetime.now()
         processed_count = 0
         skipped_count = 0
         errors = []
-        
-        for input_path in input_dir.glob('*.pdf'):
-            output_path = output_dir / input_path.name
-            
+
+        # Recursively process all PDF files
+        for input_path in input_dir.rglob('*.pdf'):
+            # Calculate the relative path and construct the output path
+            relative_path = input_path.relative_to(input_dir)
+            output_path = output_dir / relative_path
+
+            # Ensure the output directory structure exists
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
             if self.should_process(input_path, output_path):
                 logger.info(f"Processing {input_path.name}")
                 result = self.process_pdf(input_path, output_path)
@@ -171,7 +177,7 @@ class PDFOCRProcessor:
             else:
                 logger.info(f"Skipping {input_path.name} - output is newer than input")
                 skipped_count += 1
-        
+
         return DirectoryProcessResult(
             processed_count=processed_count,
             skipped_count=skipped_count,

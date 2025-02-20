@@ -154,6 +154,11 @@ def advanced_ocr(
         "-v",
         help="Enable verbose logging",
     ),
+        force_ocr: bool = typer.Option(
+        False,
+        "--force-ocr",
+        help="Force OCR on every page, even if text is detected",
+    ),
 ):
     """Process PDF files with OCR capabilities with advanced options.
     
@@ -167,6 +172,7 @@ def advanced_ocr(
             min_confidence=min_confidence,
             paragraph_mode=not no_paragraphs,
             dpi=dpi,
+            force_ocr=force_ocr,
         )
         
         processor = PDFOCRProcessor(config=config)
