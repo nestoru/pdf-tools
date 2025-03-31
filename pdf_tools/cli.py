@@ -1,3 +1,4 @@
+# pdf_tools/cli.py
 """Command-line interface for PDF tools."""
 
 import logging
@@ -32,17 +33,17 @@ def setup_logging(verbose: bool):
 def display_results_table(results):
     """Display processing results in a formatted table."""
     table = Table(title="Processing Results")
-    
+
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green")
-    
+
     table.add_row("Files Processed", str(results.processed_count))
     table.add_row("Files Skipped", str(results.skipped_count))
     table.add_row("Processing Time", f"{results.total_processing_time:.2f}s")
-    
+
     if results.errors:
         table.add_row("Errors", str(len(results.errors)))
-    
+
     console.print(table)
 
 @app.command(name="simple")
@@ -52,19 +53,38 @@ def simple_ocr(
 ):
     """
     Simple OCR command matching the original format: ocr_pdf.py <input_dir> <output_dir>
-    
+
     This provides a straightforward way to process PDFs with default settings.
     """
     try:
         input_path = Path(input_dir)
         output_path = Path(output_dir)
-        
+
         if not input_path.is_dir():
             console.print(f"[red]Error: Input directory does not exist: {input_dir}[/]")
             raise typer.Exit(1)
-            
+
+        # Ensure the output directory exists
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Check for zero-sized files in the output directory before processing
         processor = PDFOCRProcessor()
         
+        # Check for any existing empty PDF files in the output directory
+        empty_files_found = False
+        for pdf_path in output_path.rglob("*.pdf"):
+            if pdf_path.exists() and pdf_path.stat().st_size == 0:
+                console.print(f"[yellow]Warning: Found empty PDF file: {pdf_path}[/]")
+                try:
+                    pdf_path.unlink()
+                    console.print(f"[green]Removed empty file: {pdf_path}[/]")
+                except Exception as e:
+                    console.print(f"[red]Failed to remove empty file {pdf_path}: {str(e)}[/]")
+                empty_files_found = True
+                
+        if empty_files_found:
+            console.print("[yellow]Cleaned up empty PDF files from output directory[/]")
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -72,15 +92,15 @@ def simple_ocr(
         ) as progress:
             progress.add_task("Processing PDF files...", total=None)
             results = processor.process_directory(input_path, output_path)
-        
+
         display_results_table(results)
-        
+
         if results.errors:
             console.print("\n[bold red]Errors occurred:[/]")
             for error in results.errors:
                 console.print(f"[red]- {error}[/]")
             raise typer.Exit(1)
-            
+
     except Exception as e:
         console.print(f"\n[bold red]Error:[/] {str(e)}")
         raise typer.Exit(1)
@@ -108,14 +128,6 @@ def advanced_ocr(
         "-l",
         help="Languages to use for OCR (e.g., -l en -l fr)",
     ),
-    min_confidence: float = typer.Option(
-        0.5,
-        "--min-confidence",
-        "-c",
-        help="Minimum confidence threshold for OCR results",
-        min=0.0,
-        max=1.0,
-    ),
     dpi: int = typer.Option(
         300,
         "--dpi",
@@ -124,29 +136,25 @@ def advanced_ocr(
         min=72,
         max=600,
     ),
+    force_ocr: bool = typer.Option(
+        False,
+        "--force-ocr",
+        help="Force OCR on every page, even if text is detected",
+    ),
+    skip_text: bool = typer.Option(
+        False,
+        "--skip-text",
+        help="Skip OCR on pages that already contain text",
+    ),
     no_rotation: bool = typer.Option(
         False,
         "--no-rotation",
         help="Disable automatic rotation detection and correction",
     ),
-    contrast_threshold: float = typer.Option(
-        0.1,
-        "--contrast-threshold",
-        help="Contrast threshold for text detection",
-        min=0.0,
-        max=1.0,
-    ),
-    contrast_adjustment: float = typer.Option(
-        0.5,
-        "--contrast-adjustment",
-        help="Level of contrast adjustment",
-        min=0.0,
-        max=1.0,
-    ),
-    no_paragraphs: bool = typer.Option(
+    no_cleaning: bool = typer.Option(
         False,
-        "--no-paragraphs",
-        help="Disable paragraph mode in OCR",
+        "--no-cleaning",
+        help="Disable cleaning of visual noise from scanned images",
     ),
     verbose: bool = typer.Option(
         False,
@@ -154,29 +162,43 @@ def advanced_ocr(
         "-v",
         help="Enable verbose logging",
     ),
-        force_ocr: bool = typer.Option(
-        False,
-        "--force-ocr",
-        help="Force OCR on every page, even if text is detected",
-    ),
 ):
     """Process PDF files with OCR capabilities with advanced options.
-    
+
     This command provides full control over OCR settings and processing options.
     """
     setup_logging(verbose)
-    
+
     try:
         config = OCRConfig(
-            languages=languages or ['en'],
-            min_confidence=min_confidence,
-            paragraph_mode=not no_paragraphs,
+            languages=languages or ['eng'],
             dpi=dpi,
             force_ocr=force_ocr,
+            skip_text=skip_text,
+            rotate_pages=not no_rotation,
+            clean=not no_cleaning,
         )
+
+        # Ensure the output directory exists
+        output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Check for zero-sized files in the output directory before processing
+        empty_files_found = False
+        for pdf_path in output_dir.rglob("*.pdf"):
+            if pdf_path.exists() and pdf_path.stat().st_size == 0:
+                console.print(f"[yellow]Warning: Found empty PDF file: {pdf_path}[/]")
+                try:
+                    pdf_path.unlink()
+                    console.print(f"[green]Removed empty file: {pdf_path}[/]")
+                except Exception as e:
+                    console.print(f"[red]Failed to remove empty file {pdf_path}: {str(e)}[/]")
+                empty_files_found = True
+                
+        if empty_files_found:
+            console.print("[yellow]Cleaned up empty PDF files from output directory[/]")
+
         processor = PDFOCRProcessor(config=config)
-        
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -184,15 +206,15 @@ def advanced_ocr(
         ) as progress:
             progress.add_task("Processing PDF files...", total=None)
             results = processor.process_directory(input_dir, output_dir)
-        
+
         display_results_table(results)
-        
+
         if results.errors:
             console.print("\n[bold red]Errors occurred:[/]")
             for error in results.errors:
                 console.print(f"[red]- {error}[/]")
             raise typer.Exit(1)
-            
+
     except Exception as e:
         console.print(f"\n[bold red]Error:[/] {str(e)}")
         raise typer.Exit(1)
