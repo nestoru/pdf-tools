@@ -75,3 +75,4 @@ pdf-ocr-output/
 pdf-ocr-input/
 *.pdf
 temp/
+.config.json

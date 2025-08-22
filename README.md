@@ -1,14 +1,16 @@
 # PDF Tools
 
-A collection of PDF processing tools including OCR capabilities.
+A collection of PDF processing tools including OCR capabilities and translation with layout preservation.
 
 ## Features
 
 - OCR processing for PDF files
+- PDF translation with layout preservation
 - Timestamp-based processing to avoid redundant operations
 - Support for multiple languages
 - Rich CLI interface with progress tracking
 - Detailed logging and error reporting
+- Regeneration of PDFs from existing translations
 
 ## Installation
 
@@ -78,8 +80,11 @@ pip install pdf-tools
 
 ### Command Line Interface
 
-Process PDF files with OCR:
+The tool provides two main commands: `ocr` and `translate`.
 
+#### OCR Processing
+
+Process PDF files with OCR:
 ```bash
 # Basic usage
 pdf-tools /input/dir /output/dir
@@ -97,7 +102,59 @@ pdf-tools ocr --skip-text /input/dir /output/dir
 pdf-tools ocr --dpi 400 --clean /input/dir /output/dir
 ```
 
+#### PDF Translation
+
+Translate PDF files while preserving layout:
+```bash
+# Translate PDFs using OpenAI
+pdf-tools translate --config config.json --ml-provider openai --ml-model gpt-4-turbo --target-lang spa /input/dir /output/dir
+
+# Enable verbose logging
+pdf-tools translate --config config.json --ml-provider openai --ml-model gpt-3.5-turbo --target-lang fra /input/dir /output/dir --verbose
+
+# Regenerate PDFs from existing translations without re-translating
+pdf-tools translate --config config.json --ml-provider openai --ml-model gpt-4-turbo --target-lang spa --regenerate-target /input/dir /output/dir
+```
+
+Both commands use timestamp-based processing to avoid redundant operations. Files will only be processed if they've been modified since the last translation or if no previous output exists.
+
+### Translation Workflow
+
+The translation process works as follows:
+
+1. **Extraction**: Extracts text and layout information from PDFs into a structured JSON format
+2. **Translation**: Translates the content using ML services while preserving layout information
+3. **Generation**: Regenerates PDFs with translated text overlaid on the original document structure
+
+When using the `--regenerate-target` option, only step 3 is performed. This is useful for:
+- Regenerating PDFs after manually correcting translated JSON files
+- Testing improvements to the PDF generation process without redoing translations
+- Fixing PDF rendering issues without incurring additional translation costs
+
+### Configuration File
+
+Create a JSON configuration file for translation:
+
+```json
+{
+  "ml_engine": {
+    "api_key": "sk-your-api-key-here"
+  },
+  "translation": {
+    "max_expansion_factor": 1.3,
+    "max_contraction_factor": 0.7
+  }
+}
+```
+
+You can also set API keys as environment variables:
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+```
+
 ### Python API
+
+#### OCR Processing
 
 ```python
 from pathlib import Path
@@ -125,6 +182,39 @@ result = processor.process_pdf(
 )
 if result.success:
     print(f"Processed {result.pages_processed} pages")
+```
+
+#### PDF Translation
+
+```python
+from pathlib import Path
+from pdf_tools.processors.translator import PDFTranslator, TranslationConfig
+
+# Initialize translator with configuration
+config = TranslationConfig(
+    ml_provider="openai",
+    ml_model="gpt-4-turbo",
+    target_language="es",
+    api_key="your-api-key-here"
+)
+translator = PDFTranslator(config=config)
+
+# Process a single PDF
+result = translator.process_pdf(Path('input/document.pdf'))
+print(f"Generated files: {result}")
+
+# Process a directory
+input_dir = Path('input')
+output_dir = Path('output')
+results = translator.process_directory(input_dir, output_dir)
+print(f"Processed: {results.processed_count} files")
+print(f"Skipped: {results.skipped_count} files")
+
+# Generate PDF from existing translation (skip extraction and translation)
+source_pdf = Path('input/document.pdf')
+translated_json = Path('output/document_es.json')
+target_pdf = Path('output/document_es.pdf')
+translator.generate_pdf_from_json(translated_json, target_pdf)
 ```
 
 ## Development
@@ -157,7 +247,9 @@ poetry publish
 ```
 
 ### Scheduling
+
 Use just cron as follows:
+
 ```
 * * * * * ( flock -n 10 || exit 0; source ~/.profile && cd ~/workspace/pdf-tools && poetry run pdf-tools ocr /mnt/mydrive/pdf-ocr/pdf-ocr-input /mnt/mydrive/pdf-ocr/pdf-ocr-output > /tmp/pdf-ocr.log ) 10>~/pdf-ocr.lock
 ```
@@ -183,7 +275,6 @@ The project uses:
 - flake8 for linting
 
 Format code:
-
 ```bash
 # Format code with black
 poetry run black .
@@ -196,6 +287,11 @@ poetry run flake8 .
 
 # Run all formatting (if you create a Makefile or script)
 poetry run make format
+```
+
+## Sharing the code
+```
+fdfind -H -t f --exclude '.git' --exclude 'poetry.lock' -0 | xargs -0 -I {} sh -c 'echo "File: {}"; cat {}'
 ```
 
 ## License
