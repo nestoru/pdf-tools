@@ -95,6 +95,9 @@ pdf-tools ocr --lang eng --lang fra /input/dir /output/dir
 # Force OCR even if text is detected
 pdf-tools ocr --force-ocr /input/dir /output/dir
 
+# Produce default pdf and in addition docx
+pdf-tools ocr --formats pdf,docx --force-ocr /input/dir /output/dir
+
 # Skip pages that already contain text
 pdf-tools ocr --skip-text /input/dir /output/dir
 

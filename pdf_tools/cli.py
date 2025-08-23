@@ -45,6 +45,8 @@ def display_results_table(results):
     table.add_row("Processing Time", f"{results.total_processing_time:.2f}s")
     if results.errors:
         table.add_row("Errors", str(len(results.errors)))
+    if hasattr(results, 'docx_generated'):
+        table.add_row("DOCX Files Generated", str(results.docx_generated))
     console.print(table)
 
 
@@ -55,7 +57,7 @@ def simple_ocr(
 ):
     """
     Simple OCR command matching the original format: ocr_pdf.py
-    
+
     This provides a straightforward way to process PDFs with default settings.
     """
     try:
@@ -116,6 +118,12 @@ def advanced_ocr(
         dir_okay=True,
         resolve_path=True,
     ),
+    formats: Optional[str] = typer.Option(
+        "pdf",
+        "--formats",
+        "-f",
+        help="Output formats (comma-separated): pdf, docx (e.g., --formats pdf,docx)",
+    ),
     languages: Optional[List[str]] = typer.Option(
         None,
         "--lang",
@@ -161,6 +169,22 @@ def advanced_ocr(
     This command provides full control over OCR settings and processing options.
     """
     setup_logging(verbose)
+    
+    # Parse and validate formats
+    try:
+        requested_formats = [fmt.strip().lower() for fmt in formats.split(',')]
+        valid_formats = {'pdf', 'docx'}
+        invalid_formats = set(requested_formats) - valid_formats
+        if invalid_formats:
+            console.print(f"[red]Error: Invalid formats: {', '.join(invalid_formats)}. Valid formats: {', '.join(valid_formats)}[/]")
+            raise typer.Exit(1)
+        if not requested_formats:
+            console.print("[red]Error: At least one format must be specified[/]")
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error parsing formats: {str(e)}[/]")
+        raise typer.Exit(1)
+    
     try:
         config = OCRConfig(
             languages=languages or ['eng'],
@@ -169,6 +193,7 @@ def advanced_ocr(
             skip_text=skip_text,
             rotate_pages=not no_rotation,
             clean=not no_cleaning,
+            output_formats=requested_formats,
         )
         # Ensure the output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +210,20 @@ def advanced_ocr(
                 empty_files_found = True
         if empty_files_found:
             console.print("[yellow]Cleaned up empty PDF files from output directory[/]")
+        
+        # Check for DOCX dependencies if needed
+        if 'docx' in requested_formats:
+            try:
+                import pdf2docx
+                import docx  # python-docx is imported as 'docx'
+            except ImportError as e:
+                missing_pkg = str(e).split("'")[1] if "'" in str(e) else str(e)
+                console.print(f"[red]Error: Missing dependency for DOCX conversion: {missing_pkg}[/]")
+                console.print("[yellow]Please install required packages:[/]")
+                console.print("[yellow]  poetry add pdf2docx python-docx[/]")
+                console.print("[yellow]  or pip install pdf2docx python-docx[/]")
+                raise typer.Exit(1)
+        
         processor = PDFOCRProcessor(config=config)
         with Progress(
             SpinnerColumn(),
