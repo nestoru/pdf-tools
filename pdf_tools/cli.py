@@ -214,14 +214,15 @@ def advanced_ocr(
         # Check for DOCX dependencies if needed
         if 'docx' in requested_formats:
             try:
-                import pdf2docx
-                import docx  # python-docx is imported as 'docx'
+                import fitz  # PyMuPDF
+                import docx  # python-docx
+                console.print("[green]PyMuPDF and python-docx libraries found and available[/]")
             except ImportError as e:
                 missing_pkg = str(e).split("'")[1] if "'" in str(e) else str(e)
                 console.print(f"[red]Error: Missing dependency for DOCX conversion: {missing_pkg}[/]")
                 console.print("[yellow]Please install required packages:[/]")
-                console.print("[yellow]  poetry add pdf2docx python-docx[/]")
-                console.print("[yellow]  or pip install pdf2docx python-docx[/]")
+                console.print("[yellow]  poetry add PyMuPDF python-docx[/]")
+                console.print("[yellow]  or pip install PyMuPDF python-docx[/]")
                 raise typer.Exit(1)
         
         processor = PDFOCRProcessor(config=config)

@@ -105,56 +105,74 @@ class PDFOCRProcessor:
         logger.debug(f"Initialized with languages: {self.config.languages}")
         logger.debug(f"Output formats: {self.config.output_formats}")
 
-    def should_process(self, input_path: Path, output_path: Path) -> bool:
-        """Check if the PDF needs to be processed based on timestamps."""
-        if not output_path.exists():
+    def should_process(self, input_path: Path, output_dir: Path, relative_path: Path) -> bool:
+        """Check if the PDF needs to be processed based on timestamps and requested formats."""
+        
+        # Check each requested output format
+        pdf_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.pdf"
+        docx_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.docx"
+        
+        needs_processing = False
+        
+        # Check PDF if requested
+        if 'pdf' in self.config.output_formats:
+            if not pdf_output_path.exists():
+                needs_processing = True
+                logger.debug(f"PDF output missing: {pdf_output_path}")
+            elif pdf_output_path.stat().st_size == 0:
+                logger.warning(f"PDF output exists but is empty: {pdf_output_path}")
+                needs_processing = True
+            else:
+                # Check timestamps
+                input_time = datetime.fromtimestamp(input_path.stat().st_mtime)
+                output_time = datetime.fromtimestamp(pdf_output_path.stat().st_mtime)
+                if input_time > output_time:
+                    needs_processing = True
+                    logger.debug(f"PDF output older than input: {pdf_output_path}")
+        
+        # Check DOCX if requested
+        if 'docx' in self.config.output_formats:
+            if not docx_output_path.exists():
+                needs_processing = True
+                logger.debug(f"DOCX output missing: {docx_output_path}")
+            elif docx_output_path.stat().st_size == 0:
+                logger.warning(f"DOCX output exists but is empty: {docx_output_path}")
+                needs_processing = True
+            else:
+                # Check timestamps - compare against the PDF if it exists, otherwise against input
+                source_path = pdf_output_path if pdf_output_path.exists() else input_path
+                source_time = datetime.fromtimestamp(source_path.stat().st_mtime)
+                output_time = datetime.fromtimestamp(docx_output_path.stat().st_mtime)
+                if source_time > output_time:
+                    needs_processing = True
+                    logger.debug(f"DOCX output older than source: {docx_output_path}")
+        
+        return needs_processing
+
+    def check_pdf2docx_available(self) -> bool:
+        """Check if pdf2docx library is available for DOCX conversion."""
+        try:
+            import pdf2docx
+            logger.info("pdf2docx library found and available")
             return True
-
-        # Check if output file is empty
-        if output_path.stat().st_size == 0:
-            logger.warning(f"Output file exists but is empty: {output_path.absolute()}")
-            return True
-
-        input_time = datetime.fromtimestamp(input_path.stat().st_mtime)
-        output_time = datetime.fromtimestamp(output_path.stat().st_mtime)
-
-        return input_time > output_time
+        except ImportError:
+            logger.error("pdf2docx library not found")
+            return False
 
     def convert_pdf_to_docx(self, pdf_path: Path, docx_path: Path) -> bool:
-        """Convert PDF to DOCX with comprehensive formatting preservation."""
+        """Convert PDF to DOCX by extracting OCR'd text and recreating layout."""
         try:
-            from pdf2docx import Converter
+            logger.info(f"Converting PDF to DOCX with OCR text extraction: {pdf_path} -> {docx_path}")
             
-            logger.info(f"Converting PDF to DOCX: {pdf_path} -> {docx_path}")
+            # First, extract the actual text from the OCR'd PDF
+            extracted_text = self._extract_ocr_text_from_pdf(pdf_path)
+            if not extracted_text:
+                logger.error("No text could be extracted from the PDF")
+                return False
             
-            # Ensure output directory exists
-            docx_path.parent.mkdir(parents=True, exist_ok=True)
+            # Create DOCX with the extracted text
+            return self._create_docx_from_text(extracted_text, docx_path)
             
-            # Convert PDF to DOCX with advanced options for better formatting preservation
-            cv = Converter(pdf_path)
-            cv.convert(
-                docx_path, 
-                start=0, 
-                end=None,
-                # Advanced options for better conversion quality
-                multi_processing=True,
-                cpu_count=min(4, os.cpu_count() or 1),  # Use up to 4 cores but respect system limits
-            )
-            cv.close()
-            
-            # Verify the DOCX file was created and has content
-            if not docx_path.exists():
-                raise Exception("DOCX file was not created")
-            
-            if docx_path.stat().st_size == 0:
-                raise Exception("DOCX file was created but is empty")
-            
-            logger.info(f"Successfully converted to DOCX: {docx_path}")
-            return True
-            
-        except ImportError:
-            logger.error("pdf2docx library not found. Install with: pip install pdf2docx")
-            return False
         except Exception as e:
             logger.error(f"Error converting PDF to DOCX: {str(e)}")
             # Clean up empty DOCX file if it was created
@@ -165,6 +183,213 @@ class PDFOCRProcessor:
                 except Exception:
                     pass
             return False
+
+    def _extract_ocr_text_from_pdf(self, pdf_path: Path) -> List[dict]:
+        """Extract OCR'd text from PDF using PyMuPDF, which can read invisible text layers."""
+        try:
+            import fitz  # PyMuPDF
+            
+            logger.info(f"Extracting OCR'd text from PDF: {pdf_path}")
+            
+            doc = fitz.open(pdf_path)
+            pages_text = []
+            
+            for page_num in range(doc.page_count):
+                page = doc.load_page(page_num)
+                
+                # Extract text with position and formatting information
+                # This method can extract invisible OCR text that other tools miss
+                text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES)
+                
+                # Also try to get plain text as fallback
+                plain_text = page.get_text()
+                
+                page_info = {
+                    'page_number': page_num + 1,
+                    'width': page.rect.width,
+                    'height': page.rect.height,
+                    'text_dict': text_dict,
+                    'plain_text': plain_text.strip()
+                }
+                
+                pages_text.append(page_info)
+                
+                # Log what we found
+                char_count = len(plain_text.strip())
+                blocks_count = len(text_dict.get('blocks', []))
+                logger.info(f"Page {page_num + 1}: {char_count} characters, {blocks_count} blocks")
+            
+            doc.close()
+            
+            total_chars = sum(len(page['plain_text']) for page in pages_text)
+            logger.info(f"Total extracted text: {total_chars} characters across {len(pages_text)} pages")
+            
+            if total_chars == 0:
+                logger.warning("No text was extracted from the PDF - the OCR may have failed or the PDF may not contain text")
+                return []
+            
+            return pages_text
+            
+        except ImportError:
+            logger.error("PyMuPDF (fitz) library not found. Install with: pip install PyMuPDF")
+            return []
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {str(e)}")
+            return []
+
+    def _create_docx_from_text(self, pages_text: List[dict], docx_path: Path) -> bool:
+        """Create a DOCX document from extracted text while preserving basic layout."""
+        try:
+            from docx import Document
+            from docx.shared import Inches, Pt
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            
+            logger.info(f"Creating DOCX from extracted text: {docx_path}")
+            
+            # Ensure output directory exists
+            docx_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            doc = Document()
+            
+            # Set narrow margins for better space utilization
+            for section in doc.sections:
+                section.top_margin = Inches(0.5)
+                section.bottom_margin = Inches(0.5)
+                section.left_margin = Inches(0.5)
+                section.right_margin = Inches(0.5)
+            
+            for page_info in pages_text:
+                if page_info['page_number'] > 1:
+                    # Add page break between pages
+                    doc.add_page_break()
+                
+                # Add page header
+                page_header = doc.add_paragraph()
+                page_header.add_run(f"Page {page_info['page_number']}").bold = True
+                page_header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # Process the text blocks to maintain some structure
+                self._add_text_blocks_to_docx(doc, page_info)
+            
+            doc.save(docx_path)
+            
+            # Verify the output
+            file_size = docx_path.stat().st_size
+            logger.info(f"Successfully created DOCX: {docx_path} (size: {file_size} bytes)")
+            
+            # Verify content
+            self._verify_docx_content(docx_path)
+            
+            return True
+            
+        except ImportError as e:
+            logger.error(f"Required library not found for DOCX creation: {str(e)}")
+            logger.error("Install with: pip install python-docx PyMuPDF")
+            return False
+        except Exception as e:
+            logger.error(f"Error creating DOCX: {str(e)}")
+            return False
+
+    def _add_text_blocks_to_docx(self, doc, page_info):
+        """Add text blocks from a page to the DOCX document."""
+        from docx.shared import Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        
+        # First, try to use structured text from text_dict
+        text_dict = page_info.get('text_dict', {})
+        blocks = text_dict.get('blocks', [])
+        
+        if blocks:
+            # Process structured text blocks
+            for block in blocks:
+                if block.get('type') == 0:  # Text block
+                    self._process_text_block(doc, block)
+                elif block.get('type') == 1:  # Image block
+                    # Add image placeholder
+                    p = doc.add_paragraph()
+                    run = p.add_run(f"[IMAGE: {block.get('width', 0):.0f}x{block.get('height', 0):.0f}]")
+                    run.italic = True
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        else:
+            # Fallback to plain text if structured data is not available
+            plain_text = page_info.get('plain_text', '')
+            if plain_text:
+                # Split into paragraphs and add them
+                paragraphs = plain_text.split('\n')
+                for para_text in paragraphs:
+                    if para_text.strip():
+                        p = doc.add_paragraph(para_text.strip())
+
+    def _process_text_block(self, doc, block):
+        """Process a single text block from the PDF."""
+        from docx.shared import Pt  # Import here to avoid issues
+        
+        lines = block.get('lines', [])
+        if not lines:
+            return
+        
+        # Create a paragraph for this block
+        p = doc.add_paragraph()
+        
+        for line in lines:
+            spans = line.get('spans', [])
+            for span in spans:
+                text = span.get('text', '')
+                if text.strip():
+                    run = p.add_run(text)
+                    
+                    # Apply formatting if available
+                    font_size = span.get('size', 12)
+                    if font_size and font_size > 0:
+                        run.font.size = Pt(min(font_size, 18))  # Cap font size
+                    
+                    font_flags = span.get('flags', 0)
+                    if font_flags & 16:  # Bold
+                        run.bold = True
+                    if font_flags & 2:   # Italic
+                        run.italic = True
+            
+            # Add line break if this isn't the last line
+            if line != lines[-1]:
+                p.add_run('\n')
+
+    def _verify_docx_content(self, docx_path: Path) -> None:
+        """Verify that the DOCX file contains actual text content, not just images."""
+        try:
+            from docx import Document
+            
+            doc = Document(docx_path)
+            text_content = []
+            image_count = 0
+            
+            # Count text and images in the document
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_content.append(paragraph.text.strip())
+            
+            # Count images in the document
+            for rel in doc.part.rels.values():
+                if "image" in rel.target_ref:
+                    image_count += 1
+            
+            text_chars = sum(len(text) for text in text_content)
+            
+            logger.info(f"DOCX content verification: {len(text_content)} paragraphs, "
+                       f"{text_chars} text characters, {image_count} images")
+            
+            if text_chars == 0 and image_count > 0:
+                logger.warning("DOCX appears to contain only images - OCR text may not have been extracted properly")
+            elif text_chars > 0:
+                logger.info(f"DOCX contains extracted text: {text_chars} characters")
+                # Show a sample of the extracted text for verification
+                if text_content:
+                    sample = text_content[0][:100] + "..." if len(text_content[0]) > 100 else text_content[0]
+                    logger.info(f"Sample text: {sample}")
+            
+        except ImportError:
+            logger.warning("python-docx not available for content verification")
+        except Exception as e:
+            logger.warning(f"Could not verify DOCX content: {str(e)}")
 
     def process_pdf(self, input_path: Path, output_dir: Path, relative_path: Path) -> OCRResult:
         """Process a single PDF file with OCR and save the result(s)."""
@@ -271,15 +496,34 @@ class PDFOCRProcessor:
                 source_pdf = pdf_output_path if pdf_generated else input_path
                 docx_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.docx"
                 
+                # pdf2docx is required for DOCX conversion
                 if self.convert_pdf_to_docx(source_pdf, docx_output_path):
                     docx_generated = True
+                else:
+                    # If pdf2docx conversion fails, this is a hard error
+                    error_msg = "pdf2docx DOCX conversion failed"
+                    logger.error(error_msg)
+                    return OCRResult(
+                        success=False,
+                        error_message=error_msg,
+                        pages_processed=0,
+                        processing_time=(datetime.now() - start_time).total_seconds(),
+                        pdf_generated=pdf_generated,
+                        docx_generated=False
+                    )
 
             # Get page count from processed or original PDF
             try:
-                with open(pdf_output_path if pdf_generated else input_path, 'rb') as f:
-                    from pypdf import PdfReader
-                    pdf = PdfReader(f)
-                    num_pages = len(pdf.pages)
+                if pdf_generated:
+                    with open(pdf_output_path, 'rb') as f:
+                        from pypdf import PdfReader
+                        pdf = PdfReader(f)
+                        num_pages = len(pdf.pages)
+                else:
+                    with open(input_path, 'rb') as f:
+                        from pypdf import PdfReader
+                        pdf = PdfReader(f)
+                        num_pages = len(pdf.pages)
             except Exception as e:
                 logger.warning(f"Could not get page count: {str(e)}")
                 num_pages = 0
@@ -374,9 +618,7 @@ class PDFOCRProcessor:
             relative_path = input_path.relative_to(input_dir)
 
             # Check if we should process this file
-            pdf_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.pdf"
-            
-            if self.should_process(input_path, pdf_output_path):
+            if self.should_process(input_path, output_dir, relative_path):
                 result = self.process_pdf(input_path, output_dir, relative_path)
                 if result.success:
                     processed_count += 1
@@ -385,7 +627,20 @@ class PDFOCRProcessor:
                 else:
                     errors.append(result.error_message)
             else:
-                logger.info(f"Skipping {input_path.name} - output is newer than input")
+                # Determine what files already exist to provide better logging
+                pdf_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.pdf"
+                docx_output_path = output_dir / relative_path.parent / f"{relative_path.stem}.docx"
+                
+                existing_files = []
+                if pdf_output_path.exists() and pdf_output_path.stat().st_size > 0:
+                    existing_files.append("PDF")
+                if docx_output_path.exists() and docx_output_path.stat().st_size > 0:
+                    existing_files.append("DOCX")
+                
+                if existing_files:
+                    logger.info(f"Skipping {input_path.name} - {', '.join(existing_files)} already up to date")
+                else:
+                    logger.info(f"Skipping {input_path.name} - outputs are newer than input")
                 skipped_count += 1
 
         return DirectoryProcessResult(
